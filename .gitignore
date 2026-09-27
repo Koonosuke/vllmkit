@@ -1,0 +1,13 @@
+# Secrets / local settings
+.env
+.env.*
+!.env.example
+
+# Model / cache (大容量・再 download 可能)
+cache/
+models/
+
+# Logs / misc
+*.log
+.DS_Store
+__pycache__/

@@ -1,0 +1,71 @@
+# vllmkit: vLLM OpenAI-compatible Server (single service)
+#
+#   Host 127.0.0.1:${HOST_PORT}  ->  Container 0.0.0.0:8000  ->  vLLM
+#
+# 直接 docker compose を叩く場合も、このディレクトリの .env が読み込まれます。
+
+name: ${COMPOSE_PROJECT_NAME:-vllmkit}
+
+services:
+  vllm:
+    image: ${VLLM_IMAGE:?VLLM_IMAGE is not set (.env)}
+    container_name: ${CONTAINER_NAME:-vllmkit-vllm}
+    restart: ${RESTART_POLICY:-unless-stopped}
+
+    # NGC / vllm-openai どちらの Image でも同じ起動方法にするため entrypoint を明示
+    entrypoint: ["vllm", "serve"]
+    # compose が shell 風に分割する。Model は位置引数で渡す (vllm serve の推奨形式)
+    command: >-
+      ${VLLM_MODEL:?VLLM_MODEL is not set (.env)}
+      --served-model-name ${SERVED_MODEL_NAME:-${VLLM_MODEL}}
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.30}
+      --max-model-len ${MAX_MODEL_LEN:-8192}
+      ${VLLM_EXTRA_ARGS:-}
+
+    # Host 側は localhost のみに bind (LAN へは直接公開しない)
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
+
+    # GPU 割り当て (docker run --gpus all 相当)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # PyTorch の worker 間共有メモリ。ipc: host より隔離性が高い
+    shm_size: ${SHM_SIZE:-8g}
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+
+    # Model / cache を Host に永続化
+    volumes:
+      - ${HF_CACHE_DIR:-./cache/huggingface}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIR:-./cache/vllm}:/root/.cache/vllm
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 900s
+
+    labels:
+      org.vllmkit.managed: "true"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
